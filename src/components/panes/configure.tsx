@@ -1,0 +1,210 @@
+import React, {useState, useEffect} from 'react';
+import styled from 'styled-components';
+import {ConfigureBasePane} from './pane';
+import {
+  CustomFeaturesV2,
+  getLightingDefinition,
+  isVIADefinitionV2,
+  isVIADefinitionV3,
+  VIADefinitionV2,
+  VIADefinitionV3,
+} from '@the-via/reader';
+import {Grid, Row, IconContainer, MenuCell, ConfigureFlexCell} from './grid';
+import * as Keycode from './configure-panes/keycode';
+import * as Lighting from './configure-panes/lighting';
+import * as Macros from './configure-panes/macros';
+import * as SaveLoad from './configure-panes/save-load';
+import * as Layouts from './configure-panes/layouts';
+import * as RotaryEncoder from './configure-panes/custom/satisfaction75';
+import {makeCustomMenus} from './configure-panes/custom/menu-generator';
+import {Badge} from './configure-panes/badge';
+import {useAppSelector} from 'src/store/hooks';
+import {getSelectedDefinition} from 'src/store/definitionsSlice';
+import {
+  clearSelectedKey,
+  getLoadProgress,
+  getNumberOfLayers,
+  setConfigureKeyboardIsSelectable,
+} from 'src/store/keymapSlice';
+import {useDispatch} from 'react-redux';
+import {getV3MenuComponents} from 'src/store/menusSlice';
+import {getIsMacroFeatureSupported} from 'src/store/macrosSlice';
+import {MenuTooltip} from '../inputs/tooltip';
+import {useTranslation} from 'react-i18next';
+
+const MenuContainer = styled.div`
+  padding: 15px 10px 20px 10px;
+`;
+
+const Rows = [
+  Keycode,
+  Macros,
+  Layouts,
+  Lighting,
+  SaveLoad,
+  RotaryEncoder,
+  ...makeCustomMenus([]),
+];
+function getCustomPanes(customFeatures: CustomFeaturesV2[]) {
+  if (
+    customFeatures.find((feature) => feature === CustomFeaturesV2.RotaryEncoder)
+  ) {
+    return [RotaryEncoder];
+  }
+  return [];
+}
+
+const getRowsForKeyboard = (): typeof Rows => {
+  const showMacros = useAppSelector(getIsMacroFeatureSupported);
+  const v3Menus = useAppSelector(getV3MenuComponents);
+  const selectedDefinition = useAppSelector(getSelectedDefinition);
+  const numberOfLayers = useAppSelector(getNumberOfLayers);
+
+  if (!selectedDefinition) {
+    return [];
+  } else if (isVIADefinitionV2(selectedDefinition)) {
+    return getRowsForKeyboardV2(selectedDefinition, showMacros, numberOfLayers);
+  } else if (isVIADefinitionV3(selectedDefinition)) {
+    return [
+      ...filterInferredRows(selectedDefinition, showMacros, numberOfLayers, [
+        Keycode,
+        Layouts,
+        Macros,
+        SaveLoad,
+      ]),
+      ...v3Menus,
+    ];
+  } else {
+    return [];
+  }
+};
+
+const filterInferredRows = (
+  selectedDefinition: VIADefinitionV3 | VIADefinitionV2,
+  showMacros: boolean,
+  numberOfLayers: number,
+  rows: typeof Rows,
+): typeof Rows => {
+  const {layouts} = selectedDefinition;
+  let removeList: typeof Rows = [];
+  if (
+    !(layouts.optionKeys && Object.entries(layouts.optionKeys).length !== 0)
+  ) {
+    removeList = [...removeList, Layouts];
+  }
+
+  if (numberOfLayers === 0) {
+    removeList = [...removeList, Keycode, SaveLoad];
+  }
+
+  if (!showMacros) {
+    removeList = [...removeList, Macros];
+  }
+  let filteredRows = rows.filter(
+    (row) => !removeList.includes(row),
+  ) as typeof Rows;
+  return filteredRows;
+};
+
+const getRowsForKeyboardV2 = (
+  selectedDefinition: VIADefinitionV2,
+  showMacros: boolean,
+  numberOfLayers: number,
+): typeof Rows => {
+  let rows: typeof Rows = [Keycode, Layouts, Macros, SaveLoad];
+  if (isVIADefinitionV2(selectedDefinition)) {
+    const {lighting, customFeatures} = selectedDefinition;
+    const {supportedLightingValues} = getLightingDefinition(lighting);
+    if (supportedLightingValues.length !== 0) {
+      rows = [...rows, Lighting];
+    }
+    if (customFeatures) {
+      rows = [...rows, ...getCustomPanes(customFeatures)];
+    }
+  }
+  return filterInferredRows(
+    selectedDefinition,
+    showMacros,
+    numberOfLayers,
+    rows,
+  );
+};
+
+// Tide49: 简化版 ConfigurePane，不显示 Loader
+export const ConfigurePane = () => {
+  const selectedDefinition = useAppSelector(getSelectedDefinition);
+  const loadProgress = useAppSelector(getLoadProgress);
+
+  // Tide49 直接渲染配置界面（Tide49 定义已预加载，无需等待设备连接）
+  if (!selectedDefinition || loadProgress !== 1) {
+    return null;
+  }
+  return (
+    <ConfigureBasePane>
+      <ConfigureGrid />
+    </ConfigureBasePane>
+  );
+};
+
+const ConfigureGrid = () => {
+  const {t} = useTranslation();
+  const dispatch = useDispatch();
+
+  const [selectedRow, setRow] = useState(0);
+  const KeyboardRows = getRowsForKeyboard();
+  const SelectedPane = KeyboardRows[selectedRow]?.Pane;
+  const selectedTitle = KeyboardRows[selectedRow]?.Title;
+
+  useEffect(() => {
+    if (selectedTitle !== 'Keymap') {
+      dispatch(setConfigureKeyboardIsSelectable(false));
+    } else {
+      dispatch(setConfigureKeyboardIsSelectable(true));
+    }
+  }, [selectedTitle]);
+
+  return (
+    <>
+      <ConfigureFlexCell
+        onClick={(evt) => {
+          if ((evt.target as any).nodeName !== 'CANVAS')
+            dispatch(clearSelectedKey());
+        }}
+        style={{
+          pointerEvents: 'none',
+          position: 'absolute',
+          top: 50,
+          left: 0,
+          right: 0,
+        }}
+      >
+        <div style={{pointerEvents: 'all'}}>
+          {/* Tide49: 移除 LayerControl，6 层全部展开显示 */}
+          <Badge />
+        </div>
+      </ConfigureFlexCell>
+      <Grid style={{pointerEvents: 'none'}}>
+        <MenuCell style={{pointerEvents: 'all'}}>
+          <MenuContainer>
+            {(KeyboardRows || []).map(
+              ({Icon, Title}: {Icon: any; Title: string}, idx: number) => (
+                <Row
+                  key={idx}
+                  onClick={(_) => setRow(idx)}
+                  $selected={selectedRow === idx}
+                >
+                  <IconContainer>
+                    <Icon />
+                    <MenuTooltip>{t(Title)}</MenuTooltip>
+                  </IconContainer>
+                </Row>
+              ),
+            )}
+          </MenuContainer>
+        </MenuCell>
+
+        {SelectedPane && <SelectedPane />}
+      </Grid>
+    </>
+  );
+};
